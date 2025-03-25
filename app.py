@@ -9,6 +9,7 @@ from tensorflow.keras.preprocessing import image
 from tensorflow.keras.applications.imagenet_utils import preprocess_input
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 
+
 # Initialize Flask app
 app = Flask(__name__)
 
