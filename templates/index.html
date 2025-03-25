@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blood Group Detection</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/4.5.2/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/templates/style.css"> <!-- Link to the external CSS -->
+</head>
+
+<body>
+  <div class="container">
+    <div class="capture-container">
+      <h2>Blood Group Detection</h2>
+      <button class="btn btn-primary" id="captureButton">Capture Fingerprint</button>
+      <div id="statusMessage" class="status-message" style="display: none;"></div>
+    </div>
+
+    <!-- Error Message Container -->
+    <div id="errorContainer" class="error-message" style="display: none;">
+      <p id="errorMessage"></p>
+    </div>
+
+    <!-- Fingerprint Image and Prediction Results -->
+    <div id="resultContainer" style="display: none;">
+      <h3>Fingerprint Image</h3>
+      <img id="fingerprintImage" class="fingerprint-img" alt="Fingerprint Image" style="max-width: 100%; height: auto;">
+      <div id="predictionResult" class="prediction-result">
+        <h4>Predicted Blood Group: <span id="bloodGroupPrediction"></span></h4>
+        <h5>Recommended Diet: <span id="dietPlan"></span></h5>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+  <script>
+    $(document).ready(function () {
+      $('#captureButton').click(function () {
+        $('#captureButton').attr('disabled', true);
+        $('#resultContainer, #errorContainer').hide();
+        $('#fingerprintImage').attr('src', '');
+        $('#bloodGroupPrediction').text('');
+        $('#dietPlan').text('');
+        $('#statusMessage').show().text('Place Finger...');
+        setTimeout(() => $('#statusMessage').text('Finger Detected...'), 1000);
+        setTimeout(() => $('#statusMessage').text('Capturing...'), 2000);
+        setTimeout(() => {
+          $('#statusMessage').text('Predicting Blood Group...');
+          $.ajax({
+            url: '/capture',
+            method: 'POST',
+            success: function (response) {
+              if (response.status === 'captured') {
+                // Append a cache-busting timestamp to the image URL to force reload
+                const timestamp = new Date().getTime();
+                $('#fingerprintImage').attr('src', response.image_path + '?' + timestamp);
+                $('#bloodGroupPrediction').text(response.prediction);
+                $('#dietPlan').text(response.diet_plan);
+                $('#resultContainer').show();
+              } else {
+                $('#errorMessage').text('Error: ' + response.message);
+                $('#errorContainer').show();
+              }
+            },
+            error: function () {
+              $('#errorMessage').text('Error capturing fingerprint.');
+              $('#errorContainer').show();
+            },
+            complete: function () {
+              $('#captureButton').attr('disabled', false);
+              $('#statusMessage').hide();
+            }
+          });
+        }, 3000);
+      });
+    });
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,56 @@
+/* Blood Drop Animation */
+@keyframes drop {
+  0% {
+    transform: translateY(-120vh) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-60vh) rotate(15deg);
+  }
+  75% {
+    transform: translateY(60vh) rotate(-15deg);
+  }
+  100% {
+    transform: translateY(120vh) rotate(0deg);
+  }
+}
+
+/* Pulse Animation */
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+/* Shimmer Effect */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Fingerprint Scan Animation */
+@keyframes scanline {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes fingerprint-fade-in {
+  0% {
+    opacity: 0;
+    filter: blur(5px);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+  }
+}

@@ -1,0 +1,337 @@
+import os
+from flask import Flask, render_template, request, jsonify, send_from_directory
+from pyfingerprint.pyfingerprint import PyFingerprint
+from PIL import Image, ImageEnhance
+import numpy as np
+import cv2  # For edge detection
+from tensorflow.keras.models import load_model
+from tensorflow.keras.preprocessing import image
+from tensorflow.keras.applications.imagenet_utils import preprocess_input
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+
+# Initialize Flask app
+app = Flask(__name__)
+
+# Blood group prediction labels
+disease_dic = ['A+', 'A-', 'AB+', 'AB-', 'B+', 'B-', 'O+', 'O-']
+
+# Load the machine learning model
+model_path = 'model_blood.h5'  # Update with your model path
+loaded_model_imageNet = load_model(model_path)
+
+# Path to static directory for serving images
+STATIC_FOLDER = 'static'
+if not os.path.exists(STATIC_FOLDER):
+    os.makedirs(STATIC_FOLDER)
+
+# Initialize the ImageDataGenerator for data augmentation
+datagen = ImageDataGenerator(
+    rotation_range=30,
+    width_shift_range=0.2,
+    height_shift_range=0.2,
+    shear_range=0.2,
+    zoom_range=0.2,
+    horizontal_flip=True,
+    fill_mode='nearest'
+)
+
+def check_sensor_connection():
+    """Checks if the fingerprint sensor is connected and operational."""
+    try:
+        f = PyFingerprint('/dev/ttyUSB0', 57600, 0xFFFFFFFF, 0x00000000)
+        if f.verifyPassword():
+            return True
+        else:
+            return False
+    except Exception:
+        return False
+
+def capture_fingerprint():
+    """Captures fingerprint and saves it as an RGB image in the static folder."""
+    try:
+        # Initialize sensor
+        f = PyFingerprint('/dev/ttyUSB0', 57600, 0xFFFFFFFF, 0x00000000)
+
+        # Check if sensor is connected and password is correct
+        if not f.verifyPassword():
+            raise ValueError('The fingerprint sensor password is incorrect!')
+
+        print('Fingerprint sensor connected and ready!')
+
+        # Wait for finger placement
+        print('Waiting for finger...')
+        while not f.readImage():
+            pass
+
+        # Capture and save the fingerprint image
+        temp_image_path = os.path.join(STATIC_FOLDER, 'fingerprint.bmp')
+        f.downloadImage(temp_image_path)
+
+        # Convert to RGB and save as PNG
+        img = Image.open(temp_image_path).convert('RGB')
+        rgb_image_path = os.path.join(STATIC_FOLDER, 'fingerprint_rgb.png')
+        img.save(rgb_image_path)
+
+        print(f"Fingerprint saved at {rgb_image_path}")
+        return rgb_image_path  # Return the local path to the RGB image
+    except Exception as e:
+        raise RuntimeError(f"Fingerprint capture failed: {str(e)}")
+
+def preprocess_image(image_path):
+    """Preprocesses the image by performing data augmentation and edge detection."""
+    try:
+        # Load the image
+        img = Image.open(image_path).convert('RGB')
+
+        # Apply edge detection (Canny edge detection using OpenCV)
+        img_array = np.array(img)
+        edges = cv2.Canny(img_array, 100, 200)  # Perform edge detection
+
+        # Convert back to PIL Image
+        edges_image = Image.fromarray(edges)
+
+        # Enhance the image (optional: adjust brightness, contrast, etc.)
+        enhancer = ImageEnhance.Contrast(edges_image)
+        enhanced_image = enhancer.enhance(2)  # Increase contrast
+
+        # Convert enhanced image to numpy array
+        augmented_image = np.array(enhanced_image)
+
+        # Reshape for ImageDataGenerator (add batch dimension and channels)
+        augmented_image = augmented_image.reshape((1,) + augmented_image.shape + (1,))  # Shape: (1, height, width, channels)
+
+        # Apply data augmentation
+        augmented_image_gen = datagen.flow(augmented_image, batch_size=1)
+
+        # Get augmented image (use __next__ or next())
+        augmented_image = next(augmented_image_gen)
+
+        # Resize image to model input size (e.g., 256x256)
+        augmented_image_resized = cv2.resize(augmented_image[0], (256, 256))
+
+        # Add the missing channels dimension for RGB (convert to (256, 256, 3))
+        augmented_image_resized_rgb = np.stack([augmented_image_resized] * 3, axis=-1)
+
+        return augmented_image_resized_rgb
+    except Exception as e:
+        raise RuntimeError(f"Image preprocessing failed: {str(e)}")
+
+def predict_blood_group(image_path):
+    """Predicts the blood group from a processed fingerprint image."""
+    try:
+        # Preprocess the image
+        processed_image = preprocess_image(image_path)
+
+        # Convert the image to the format expected by the model (batch_size, height, width, channels)
+        x = np.expand_dims(processed_image, axis=0)
+        x = preprocess_input(x)
+
+        # Predict using the loaded model
+        result = loaded_model_imageNet.predict(x)
+        final_list_result = (result * 100).astype('int')
+        list_vals = list(final_list_result[0])
+        result_val = max(list_vals)
+        index_result = list_vals.index(result_val)
+
+        return index_result
+    except Exception as e:
+        raise RuntimeError(f"Prediction failed: {str(e)}")
+
+@app.route('/')
+def home():
+    return render_template('index.html', title="Blood Group Detection")
+
+@app.route('/capture', methods=['GET', 'POST'])
+def capture():
+    if request.method == 'POST':
+        try:
+            # First check if the fingerprint sensor is available
+            sensor_connected = check_sensor_connection()
+
+            if not sensor_connected:
+                return jsonify({"status": "error", "message": "Fingerprint sensor is not connected!"})
+
+            # Capture fingerprint and get image path
+            image_filename = capture_fingerprint()
+
+            # Predict blood group based on the captured fingerprint image
+            prediction_idx = predict_blood_group(image_filename)
+            prediction = str(disease_dic[prediction_idx])
+
+            # Return the captured image and prediction result to be displayed
+            return jsonify({
+                "status": "captured",
+                "image_path": f"/static/{os.path.basename(image_filename)}",
+                "prediction": prediction
+            })
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)})
+
+    return render_template('index.html', title="Capture Fingerprint")
+
+# To serve fingerprint images
+@app.route('/static/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(STATIC_FOLDER, filename)
+
+if __name__ == '__main__':
+    app.run(debug=True, port=3838)
+
+
+
+
+
+
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blood Group Detection</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/4.5.2/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/templates/style.css"> <!-- Link to the external CSS -->
+</head>
+<style>
+  /* Blood-Inspired Dynamic Background */
+  body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    font-family: Arial, sans-serif;
+    background-image: url('/static/MacBook Air - 2.png'); /* Correct path to the static image */
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+  }
+
+  .container {
+    position: relative;
+    z-index: 100;
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 15px;
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3);
+    padding: 30px;
+    width: 100%;
+    max-width: 600px;
+    text-align: center;
+    margin-left:100px;
+    margin-right: -40px;
+  }
+
+  .capture-container h2 {
+    color: #b30000;
+    font-weight: bold;
+    margin-bottom: 20px;
+  }
+
+  .btn-primary {
+    background-color: #b30000;
+    border: none;
+    font-size: 18px;
+    padding: 12px 24px;
+    border-radius: 8px;
+    transition: transform 0.2s ease, background-color 0.2s ease;
+  }
+
+  #captureButton {
+    color: white;
+  }
+
+  .btn-primary:hover {
+    background-color: #990000;
+    transform: scale(1.05);
+  }
+
+  .status-message {
+    color: #b30000;
+    font-size: 16px;
+    margin-top: 20px;
+  }
+
+  .error-message {
+    color: #ff0000;
+    font-size: 16px;
+    margin-top: 20px;
+  }
+
+  .prediction-result h4 {
+    color: #333;
+    font-weight: bold;
+    margin-top: 20px;
+  }
+
+</style>
+
+<body>
+  <div class="container">
+    <div class="capture-container">
+      <h2>Blood Group Detection</h2>
+      <button class="btn btn-primary" id="captureButton">Capture Fingerprint</button>
+      <div id="statusMessage" class="status-message" style="display: none;"></div>
+    </div>
+
+    <!-- Error Message Container -->
+    <div id="errorContainer" class="error-message" style="display: none;">
+      <p id="errorMessage"></p>
+    </div>
+
+    <!-- Fingerprint Image and Prediction Results -->
+    <div id="resultContainer" style="display: none;">
+      <h3>Fingerprint Image</h3>
+      <img id="fingerprintImage" class="fingerprint-img" alt="Fingerprint Image" style="max-width: 100%; height: auto;">
+      <div id="predictionResult" class="prediction-result">
+        <h4>Predicted Blood Group: <span id="bloodGroupPrediction"></span></h4>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+  <script>
+    $(document).ready(function () {
+      $('#captureButton').click(function () {
+        $('#captureButton').attr('disabled', true);
+        $('#resultContainer, #errorContainer').hide();
+        $('#fingerprintImage').attr('src', '');
+        $('#bloodGroupPrediction').text('');
+        $('#statusMessage').show().text('Place Finger...');
+        setTimeout(() => $('#statusMessage').text('Finger Detected...'), 1000);
+        setTimeout(() => $('#statusMessage').text('Capturing...'), 2000);
+        setTimeout(() => {
+          $('#statusMessage').text('Predicting Blood Group...');
+          $.ajax({
+            url: '/capture',
+            method: 'POST',
+            success: function (response) {
+              if (response.status === 'captured') {
+                // Append a cache-busting timestamp to the image URL to force reload
+                const timestamp = new Date().getTime();
+                $('#fingerprintImage').attr('src', response.image_path + '?' + timestamp);
+                $('#bloodGroupPrediction').text(response.prediction);
+                $('#resultContainer').show();
+              } else {
+                $('#errorMessage').text('Error: ' + response.message);
+                $('#errorContainer').show();
+              }
+            },
+            error: function () {
+              $('#errorMessage').text('Error capturing fingerprint.');
+              $('#errorContainer').show();
+            },
+            complete: function () {
+              $('#statusMessage').hide();
+              $('#captureButton').attr('disabled', false);
+            }
+          });
+        }, 3000);
+      });
+    });
+  </script>
+</body>
+
+</html>
